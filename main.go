@@ -293,14 +293,15 @@ func monitorClipboardChanges() {
 
             currentContent := readClipboard()
             if currentContent != lastClipboardContent {
-				fmt.Printf("[INFO] Clipboard updated: %s\n", currentContent)
-                broadcastClipboard(currentContent, nil)
+                fmt.Printf("[INFO] Clipboard updated locally: %s\n", currentContent)
+                broadcastClipboard(currentContent, "local", nil)
                 lastClipboardContent = currentContent
             }
             time.Sleep(1 * time.Second)
         }
     }
 }
+
 
 
 // Handle client WebSocket communication
@@ -312,20 +313,20 @@ func handleClient(conn *websocket.Conn) {
             break
         }
 
-        // Directly use the received message (clipboard content) without JSON
         content := string(message)
         fmt.Printf("[INFO] Clipboard received from client: %s\n", content)
 
-        // Check if the clipboard content is already the same to avoid unnecessary writes
         if content != lastClipboardContent {
             err = clipboard.WriteAll(content)
             if err != nil {
                 fmt.Printf("[ERROR] Failed to write to clipboard: %v\n", err)
                 sendNotification("Clipboard Sync Error", "Failed to update clipboard.")
             } else {
-                fmt.Println("[INFO] Clipboard successfully updated.")
-                sendNotification("Clipboard Sync", "Content updated: "+content)
+                fmt.Println("[INFO] Clipboard successfully updated from client.")
                 lastClipboardContent = content
+
+                // Set the clipboard update source as "server"
+                broadcastClipboard(content, "server", conn)
             }
         } else {
             fmt.Println("[INFO] Ignored duplicate clipboard content.")
@@ -335,25 +336,30 @@ func handleClient(conn *websocket.Conn) {
 
 
 // Broadcast clipboard updates to all connected clients except the source
-func broadcastClipboard(content string, source *websocket.Conn) {
-	clientsMutex.Lock()
-	defer clientsMutex.Unlock()
+func broadcastClipboard(content, source string, sourceConn *websocket.Conn) {
+    if source == "server" {
+        fmt.Println("[INFO] Skipping broadcast for server-originated update.")
+        return
+    }
 
-	for client := range clients {
-		if client == source {
-			continue // Skip broadcasting to the source client
-		}
+    clientsMutex.Lock()
+    defer clientsMutex.Unlock()
 
-		// Send plain text clipboard content
-		err := client.WriteMessage(websocket.TextMessage, []byte(content))
-		if err != nil {
-			fmt.Printf("[ERROR] Failed to send message to client: %v\n", err)
-			client.Close()
-			delete(clients, client)
-		}
-	}
-	fmt.Printf("[INFO] Broadcasted clipboard update to %d clients\n", len(clients))
+    for client := range clients {
+        if client == sourceConn {
+            continue // Skip broadcasting to the source client
+        }
+
+        err := client.WriteMessage(websocket.TextMessage, []byte(content))
+        if err != nil {
+            fmt.Printf("[ERROR] Failed to send message to client: %v\n", err)
+            client.Close()
+            delete(clients, client)
+        }
+    }
+    fmt.Printf("[INFO] Broadcasted clipboard update to %d clients\n", len(clients))
 }
+
 
 
 
