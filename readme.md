@@ -1,4 +1,4 @@
-# Clipy
+# Clipy - client - pc
 
 Clipy is a bidirectional clipboard synchronization tool that allows seamless clipboard sharing between your computer and Android device. The tool consists of a lightweight server written in Go and a native Android app. It enables clipboard sync via WebSocket communication, ensuring that content copied on one device can be easily accessed and pasted on the other.
 
