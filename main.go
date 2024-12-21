@@ -207,33 +207,50 @@ func resumeServer() {
 
 // Start the WebSocket server
 func startWebSocketServer() {
-    fmt.Println("[INFO] Starting WebSocket server on ws://0.0.0.0:8080/ws")
+    // Get the specific local IP address
+    ip := getLocalIP()
+    if ip == "" {
+        fmt.Println("[ERROR] Could not determine local IP address")
+        return
+    }
+
+	// Start the WebSocket server on the local IP address
+    address := fmt.Sprintf("%s:8080", ip)
+    fmt.Printf("[INFO] Starting WebSocket server on ws://%s/ws\n", address)
+
+	// Create a new WebSocket upgrader with custom origin check
     upgrader := websocket.Upgrader{
-		CheckOrigin: func(r *http.Request) bool {
-			return true
+        CheckOrigin: func(r *http.Request) bool {
+            return true
         },
     }
-	
+
+	// Create a new HTTP multiplexer and handle WebSocket connections
     mux := http.NewServeMux()
     mux.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
-		conn, err := upgrader.Upgrade(w, r, nil)
+        conn, err := upgrader.Upgrade(w, r, nil)
+
+		// Handle WebSocket upgrade errors
         if err != nil {
-			fmt.Println("[ERROR] WebSocket upgrade error:", err)
+            fmt.Println("[ERROR] WebSocket upgrade error:", err)
             return
         }
-		go handleClient(conn)
+        go handleClient(conn)
         defer conn.Close()
-		
+
         clientsMutex.Lock()
         clients[conn] = true
         clientsMutex.Unlock()
-		
+
         // Update the number of connected devices
         updateConnectedDevices()
 
+		// Send a notification when a new device connects
         fmt.Printf("[INFO] Client connected. Total clients: %d\n", len(clients))
-		sendNotification("Device Connected", "total devices: " + string(len(clients)))
-        for {
+        sendNotification("Device Connected", "Total devices: "+fmt.Sprint(len(clients)))
+        
+		// Listen for client disconnects and remove them from the clients map
+		for {
             _, _, err := conn.ReadMessage()
             if err != nil {
                 clientsMutex.Lock()
@@ -244,14 +261,14 @@ func startWebSocketServer() {
                 updateConnectedDevices()
 
                 fmt.Printf("[INFO] Client disconnected. Total clients: %d\n", len(clients))
-				sendNotification("Device Disconnected", "total devices: " + string(len(clients)))
+                sendNotification("Device Disconnected", "Total devices: "+fmt.Sprint(len(clients)))
                 break
             }
         }
     })
 
     // Create a new HTTP server to handle WebSocket connections
-    httpServer = &http.Server{Addr: ":8080", Handler: mux}
+    httpServer = &http.Server{Addr: address, Handler: mux}
     err := httpServer.ListenAndServe()
     if err != nil && err != http.ErrServerClosed {
         fmt.Println("[ERROR] WebSocket server error:", err)
