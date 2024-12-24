@@ -258,14 +258,18 @@ func startWebSocketServer() {
 			default:
 				_, message, err := conn.ReadMessage()
 				if err != nil {
+					// Client disconnected or error reading message
 					clientsMutex.Lock()
-					delete(clients, conn)
+					delete(clients, conn) // Remove client from the map
 					clientsMutex.Unlock()
 
+					// Update the number of connected devices
 					updateConnectedDevices()
+
+					// Send notification if the client is disconnected
 					fmt.Printf("[INFO] Client disconnected. Total clients: %d\n", len(clients))
 					sendNotification("Device Disconnected", "Total devices: "+fmt.Sprint(len(clients)))
-					break
+					return // Break the loop once the client disconnects
 				}
 
 				// Process received message
