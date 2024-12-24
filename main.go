@@ -34,7 +34,6 @@ var (
 	notificationsMenuItem *systray.MenuItem // Menu item to toggle notifications
 )
 
-var wg sync.WaitGroup // WaitGroup to track goroutines
 var statusMenuItem *systray.MenuItem
 var connectedDevicesMenuItem *systray.MenuItem
 
