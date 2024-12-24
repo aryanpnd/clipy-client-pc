@@ -3,41 +3,40 @@ package main
 import (
 	"encoding/base64"
 	"fmt"
-	"net"
-	"strings"
-	"net/http"
-	"os/exec"
-	"os"
 	"io"
+	"net"
+	"net/http"
+	"os"
+	"os/exec"
 	"runtime"
+	"strings"
 	"sync"
 	"time"
+
 	"github.com/atotto/clipboard"
+	"github.com/gen2brain/beeep"
 	"github.com/getlantern/systray"
 	"github.com/gorilla/websocket"
 	"github.com/skip2/go-qrcode"
-	"github.com/gen2brain/beeep"
 )
 
-
 var (
-	clients             = make(map[*websocket.Conn]bool)
-	clientsMutex        sync.Mutex
-	lastClipboardContent string
-	isServerRunning     = false
-	paused              = false   // A flag to control pause/resume
-	stopMonitoring      = make(chan bool)
-	serverDone          = make(chan bool)
-	serverShutdown      = make(chan bool) // Channel to signal server shutdown
-	httpServer          *http.Server      // HTTP server instance
-	notificationsEnabled = true // Flag to enable/disable notifications
-	notificationsMenuItem *systray.MenuItem	// Menu item to toggle notifications
+	clients               = make(map[*websocket.Conn]bool)
+	clientsMutex          sync.Mutex
+	lastClipboardContent  string
+	isServerRunning       = false
+	paused                = false // A flag to control pause/resume
+	stopMonitoring        = make(chan bool)
+	serverDone            = make(chan bool)
+	serverShutdown        = make(chan bool) // Channel to signal server shutdown
+	httpServer            *http.Server      // HTTP server instance
+	notificationsEnabled  = true            // Flag to enable/disable notifications
+	notificationsMenuItem *systray.MenuItem // Menu item to toggle notifications
 )
 
 var wg sync.WaitGroup // WaitGroup to track goroutines
 var statusMenuItem *systray.MenuItem
 var connectedDevicesMenuItem *systray.MenuItem
-
 
 // Start the application
 func main() {
@@ -54,314 +53,303 @@ func startSystemTray() {
 
 // Initialize system tray options
 func onReady() {
-    systray.SetIcon(getIcon())
-    systray.SetTitle("Clipboard Sync")
-    systray.SetTooltip("Clipboard Sync Server")
+	systray.SetIcon(getIcon())
+	systray.SetTitle("Clipboard Sync")
+	systray.SetTooltip("Clipboard Sync Server")
 
-    // Add the new status items
-    statusMenuItem = systray.AddMenuItem("Server Status: Paused", "Displays the current status of the server")
-    connectedDevicesMenuItem = systray.AddMenuItem("Connected Devices: 0", "Displays the number of connected devices")
+	// Add the new status items
+	statusMenuItem = systray.AddMenuItem("Server Status: Paused", "Displays the current status of the server")
+	connectedDevicesMenuItem = systray.AddMenuItem("Connected Devices: 0", "Displays the number of connected devices")
 
-    // Add menu items
-    startMenuItem := systray.AddMenuItem("Start sync", "Start the Clipboard Sync server")
-    stopMenuItem := systray.AddMenuItem("Stop sync", "Stop the Clipboard Sync server")
-    openQRMenuItem := systray.AddMenuItem("Open QR", "Open the QR code page in browser")
-	
-    // Add the toggle notifications button
-    notificationsMenuItem = systray.AddMenuItem("Disable Notifications", "Toggle notifications on/off")
+	// Add menu items
+	startMenuItem := systray.AddMenuItem("Start sync", "Start the Clipboard Sync server")
+	stopMenuItem := systray.AddMenuItem("Stop sync", "Stop the Clipboard Sync server")
+	openQRMenuItem := systray.AddMenuItem("Open QR", "Open the QR code page in browser")
+
+	// Add the toggle notifications button
+	notificationsMenuItem = systray.AddMenuItem("Disable Notifications", "Toggle notifications on/off")
 
 	// Add the exit button
-    exitMenuItem := systray.AddMenuItem("Exit", "Exit the application")
-    
-    // Start the server on first launch
-    startServer()
+	exitMenuItem := systray.AddMenuItem("Exit", "Exit the application")
 
-    // Initially disable the stop button and enable the start button based on server state
-    updateMenuItemsState(startMenuItem, stopMenuItem)
+	// Start the server on first launch
+	startServer()
 
-    // Handle menu item clicks
-    go func() {
-        for {
-            select {
-            case <-startMenuItem.ClickedCh:
-                fmt.Println("[INFO] Start menu clicked")
-                if paused {
-                    resumeServer() // Resume the server if it's paused
-                } else {
-                    startServer() // Start the server if it's not running
-                }
-                // Update the state of the menu items after starting the server
-                updateMenuItemsState(startMenuItem, stopMenuItem)
+	// Initially disable the stop button and enable the start button based on server state
+	updateMenuItemsState(startMenuItem, stopMenuItem)
 
-            case <-stopMenuItem.ClickedCh:
-                fmt.Println("[INFO] Stop menu clicked")
-                stopServer() // Pause the server
-                // Update the state of the menu items after stopping the server
-                updateMenuItemsState(startMenuItem, stopMenuItem)
+	// Handle menu item clicks
+	go func() {
+		for {
+			select {
+			case <-startMenuItem.ClickedCh:
+				fmt.Println("[INFO] Start menu clicked")
+				if paused {
+					resumeServer() // Resume the server if it's paused
+				} else {
+					startServer() // Start the server if it's not running
+				}
+				// Update the state of the menu items after starting the server
+				updateMenuItemsState(startMenuItem, stopMenuItem)
 
-            case <-openQRMenuItem.ClickedCh:
-                fmt.Println("[INFO] Open QR menu clicked")
-                openQRCodePage()
+			case <-stopMenuItem.ClickedCh:
+				fmt.Println("[INFO] Stop menu clicked")
+				stopServer() // Pause the server
+				// Update the state of the menu items after stopping the server
+				updateMenuItemsState(startMenuItem, stopMenuItem)
 
-            case <-exitMenuItem.ClickedCh:
-                fmt.Println("[INFO] Exit menu clicked")
+			case <-openQRMenuItem.ClickedCh:
+				fmt.Println("[INFO] Open QR menu clicked")
+				openQRCodePage()
+
+			case <-exitMenuItem.ClickedCh:
+				fmt.Println("[INFO] Exit menu clicked")
 				os.Exit(0) // Exit the application
-                return
+				return
 
-            case <-notificationsMenuItem.ClickedCh:
-                toggleNotifications() // Toggle notifications on or off
-            }
-        }
-    }()
+			case <-notificationsMenuItem.ClickedCh:
+				toggleNotifications() // Toggle notifications on or off
+			}
+		}
+	}()
 }
 
 // Function to update the status in the menu
 func updateServerStatus() {
-    if paused {
-        statusMenuItem.SetTitle("Server Status: Paused")
-    } else if isServerRunning {
-        statusMenuItem.SetTitle("Server Status: Running")
-    } else {
-        statusMenuItem.SetTitle("Server Status: Stopped")
-    }
+	if paused {
+		statusMenuItem.SetTitle("Server Status: Paused")
+	} else if isServerRunning {
+		statusMenuItem.SetTitle("Server Status: Running")
+	} else {
+		statusMenuItem.SetTitle("Server Status: Stopped")
+	}
 }
 
 // Function to update the number of connected devices
 func updateConnectedDevices() {
-    clientsMutex.Lock()
-    connectedDevicesMenuItem.SetTitle(fmt.Sprintf("Connected Devices: %d", len(clients)))
-    clientsMutex.Unlock()
+	clientsMutex.Lock()
+	connectedDevicesMenuItem.SetTitle(fmt.Sprintf("Connected Devices: %d", len(clients)))
+	clientsMutex.Unlock()
 }
 
 // Update the menu items' enabled/disabled state
 func updateMenuItemsState(startMenuItem, stopMenuItem *systray.MenuItem) {
-    if paused {
-        startMenuItem.Enable()  // Enable "Start" button if server is paused
-        stopMenuItem.Disable() // Disable "Stop" button if server is paused
-    } else if isServerRunning {
-        startMenuItem.Disable()  // Disable "Start" button if server is running
-        stopMenuItem.Enable() // Enable "Stop" button if server is running
-    } else {
-        startMenuItem.Enable()  // Enable "Start" button if the server is not running
-        stopMenuItem.Disable() // Disable "Stop" button if the server is not running
-    }
+	if paused {
+		startMenuItem.Enable() // Enable "Start" button if server is paused
+		stopMenuItem.Disable() // Disable "Stop" button if server is paused
+	} else if isServerRunning {
+		startMenuItem.Disable() // Disable "Start" button if server is running
+		stopMenuItem.Enable()   // Enable "Stop" button if server is running
+	} else {
+		startMenuItem.Enable() // Enable "Start" button if the server is not running
+		stopMenuItem.Disable() // Disable "Stop" button if the server is not running
+	}
 
-    // Update the status and connected devices info
-    updateServerStatus()
-    updateConnectedDevices()
+	// Update the status and connected devices info
+	updateServerStatus()
+	updateConnectedDevices()
 }
 
 // Start the WebSocket server and clipboard monitoring
 func startServer() {
-    if isServerRunning {
-        fmt.Println("[INFO] Server is already running")
+	if isServerRunning {
+		fmt.Println("[INFO] Server is already running")
 		sendNotification("Running", "Server is already running")
-        return
-    }
+		return
+	}
 
-    isServerRunning = true
-    fmt.Println("[INFO] Starting server and clipboard monitoring")
+	isServerRunning = true
+	fmt.Println("[INFO] Starting server and clipboard monitoring")
 
-    // Reinitialize channels
-    stopMonitoring = make(chan bool)
-    serverDone = make(chan bool)
-    serverShutdown = make(chan bool)
+	// Reinitialize channels
+	stopMonitoring = make(chan bool)
+	serverDone = make(chan bool)
+	serverShutdown = make(chan bool)
 
-    // Start WebSocket server and clipboard monitoring in separate goroutines
-    go startWebSocketServer()
-    go monitorClipboardChanges()
+	// Start WebSocket server and clipboard monitoring in separate goroutines
+	go startWebSocketServer()
+	go monitorClipboardChanges()
 
-    // Optionally open QR page after server starts
-    openQRCodePage()
+	// Optionally open QR page after server starts
+	openQRCodePage()
 }
 
 // Stop the clipboard monitoring (pause)
 func stopServer() {
-    if !isServerRunning {
-        fmt.Println("[INFO] Server is not running")
-        return
-    }
+	if !isServerRunning {
+		fmt.Println("[INFO] Server is not running")
+		return
+	}
 
-    paused = true // Set the flag to paused
-    fmt.Println("[INFO] Pausing server and clipboard monitoring")
+	paused = true // Set the flag to paused
+	fmt.Println("[INFO] Pausing server and clipboard monitoring")
 
-    // Send stop signal to clipboard monitoring
-    stopMonitoring <- true
+	// Send stop signal to clipboard monitoring
+	stopMonitoring <- true
 	sendNotification("Paused", "Clipboard syncing paused")
 }
 
 // Resume clipboard monitoring
 func resumeServer() {
-    if !isServerRunning || !paused {
-        fmt.Println("[INFO] Server is already running or not paused")
-        return
-    }
+	if !isServerRunning || !paused {
+		fmt.Println("[INFO] Server is already running or not paused")
+		return
+	}
 
-    paused = false // Set the flag to resume
-    fmt.Println("[INFO] Resuming clipboard monitoring")
+	paused = false // Set the flag to resume
+	fmt.Println("[INFO] Resuming clipboard monitoring")
 
-    // Start clipboard monitoring again
-    go monitorClipboardChanges()
+	// Start clipboard monitoring again
+	go monitorClipboardChanges()
 	sendNotification("Resumed", "Clipboard syncing resumed")
 }
 
 // Start the WebSocket server
 func startWebSocketServer() {
-    // Get the specific local IP address
-    ip := getLocalIP()
-    if ip == "" {
-        fmt.Println("[ERROR] Could not determine local IP address")
-        return
-    }
+	// Get the specific local IP address
+	ip := getLocalIP()
+	if ip == "" {
+		fmt.Println("[ERROR] Could not determine local IP address")
+		return
+	}
 
 	// Start the WebSocket server on the local IP address
-    address := fmt.Sprintf("%s:8080", ip)
-    fmt.Printf("[INFO] Starting WebSocket server on ws://%s/ws\n", address)
+	address := fmt.Sprintf("%s:8080", ip)
+	fmt.Printf("[INFO] Starting WebSocket server on ws://%s/ws\n", address)
 
 	// Create a new WebSocket upgrader with custom origin check
-    upgrader := websocket.Upgrader{
-        CheckOrigin: func(r *http.Request) bool {
-            return true
-        },
-    }
+	upgrader := websocket.Upgrader{
+		CheckOrigin: func(r *http.Request) bool {
+			return true
+		},
+	}
 
 	// Create a new HTTP multiplexer and handle WebSocket connections
-    mux := http.NewServeMux()
-    mux.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
-        conn, err := upgrader.Upgrade(w, r, nil)
+	mux := http.NewServeMux()
+	mux.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			fmt.Println("[ERROR] WebSocket upgrade error:", err)
+			return
+		}
+		defer conn.Close()
 
-		// Handle WebSocket upgrade errors
-        if err != nil {
-            fmt.Println("[ERROR] WebSocket upgrade error:", err)
-            return
-        }
-        go handleClient(conn)
-        defer conn.Close()
+		clientsMutex.Lock()
+		clients[conn] = true
+		clientsMutex.Unlock()
 
-        clientsMutex.Lock()
-        clients[conn] = true
-        clientsMutex.Unlock()
+		// Update the number of connected devices
+		updateConnectedDevices()
 
-        // Update the number of connected devices
-        updateConnectedDevices()
+		fmt.Printf("[INFO] Client connected. Total clients: %d\n", len(clients))
+		sendNotification("Device Connected", "Total devices: "+fmt.Sprint(len(clients)))
 
-		// Send a notification when a new device connects
-        fmt.Printf("[INFO] Client connected. Total clients: %d\n", len(clients))
-        sendNotification("Device Connected", "Total devices: "+fmt.Sprint(len(clients)))
-        
-		// Listen for client disconnects and remove them from the clients map
+		// Handle WebSocket messages
 		for {
-            _, _, err := conn.ReadMessage()
-            if err != nil {
-                clientsMutex.Lock()
-                delete(clients, conn)
-                clientsMutex.Unlock()
+			// Check for paused state
+			if paused {
+				time.Sleep(1 * time.Second) // Wait while paused
+				continue
+			}
 
-                // Update the number of connected devices when a client disconnects
-                updateConnectedDevices()
+			select {
+			case <-stopMonitoring:
+				fmt.Println("[INFO] WebSocket server shutting down.")
+				return
+			default:
+				_, message, err := conn.ReadMessage()
+				if err != nil {
+					clientsMutex.Lock()
+					delete(clients, conn)
+					clientsMutex.Unlock()
 
-                fmt.Printf("[INFO] Client disconnected. Total clients: %d\n", len(clients))
-                sendNotification("Device Disconnected", "Total devices: "+fmt.Sprint(len(clients)))
-                break
-            }
-        }
-    })
+					updateConnectedDevices()
+					fmt.Printf("[INFO] Client disconnected. Total clients: %d\n", len(clients))
+					sendNotification("Device Disconnected", "Total devices: "+fmt.Sprint(len(clients)))
+					break
+				}
 
-    // Create a new HTTP server to handle WebSocket connections
-    httpServer = &http.Server{Addr: address, Handler: mux}
-    err := httpServer.ListenAndServe()
-    if err != nil && err != http.ErrServerClosed {
-        fmt.Println("[ERROR] WebSocket server error:", err)
-    }
+				// Process received message
+				content := string(message)
+				fmt.Printf("[INFO] Clipboard received from client: %s\n", content)
+
+				if content != lastClipboardContent {
+					err = clipboard.WriteAll(content)
+					if err != nil {
+						fmt.Printf("[ERROR] Failed to write to clipboard: %v\n", err)
+						sendNotification("Clipboard Sync Error", "Failed to update clipboard.")
+					} else {
+						fmt.Println("[INFO] Clipboard successfully updated from client.")
+						lastClipboardContent = content
+
+						// Broadcast to other clients except the source
+						broadcastClipboard(content, "server", conn)
+					}
+				} else {
+					fmt.Println("[INFO] Ignored duplicate clipboard content.")
+				}
+			}
+		}
+	})
+
+	// Create and start the HTTP server
+	httpServer = &http.Server{Addr: address, Handler: mux}
+	err := httpServer.ListenAndServe()
+	if err != nil && err != http.ErrServerClosed {
+		fmt.Println("[ERROR] WebSocket server error:", err)
+	}
 }
-
 
 // Monitor clipboard changes and broadcast new content to clients
 func monitorClipboardChanges() {
-    lastClipboardContent = readClipboard()
+	lastClipboardContent = readClipboard()
 
-    for {
-        select {
-        case <-stopMonitoring:
-            fmt.Println("[INFO] Clipboard monitoring paused")
-            return
-        default:
-            if paused {
-                time.Sleep(1 * time.Second) // Just wait when paused
-                continue
-            }
+	for {
+		select {
+		case <-stopMonitoring:
+			fmt.Println("[INFO] Clipboard monitoring paused")
+			return
+		default:
+			if paused {
+				time.Sleep(1 * time.Second) // Just wait when paused
+				continue
+			}
 
-            currentContent := readClipboard()
-            if currentContent != lastClipboardContent {
-                fmt.Printf("[INFO] Clipboard updated locally: %s\n", currentContent)
-                broadcastClipboard(currentContent, "local", nil)
-                lastClipboardContent = currentContent
-            }
-            time.Sleep(1 * time.Second)
-        }
-    }
+			currentContent := readClipboard()
+			if currentContent != lastClipboardContent {
+				fmt.Printf("[INFO] Clipboard updated locally: %s\n", currentContent)
+				broadcastClipboard(currentContent, "local", nil)
+				lastClipboardContent = currentContent
+			}
+			time.Sleep(1 * time.Second)
+		}
+	}
 }
-
-
-
-// Handle client WebSocket communication
-func handleClient(conn *websocket.Conn) {
-    for {
-        _, message, err := conn.ReadMessage()
-        if err != nil {
-            fmt.Printf("[ERROR] Failed to read message from client: %v\n", err)
-            break
-        }
-
-        content := string(message)
-        fmt.Printf("[INFO] Clipboard received from client: %s\n", content)
-
-        if content != lastClipboardContent {
-            err = clipboard.WriteAll(content)
-            if err != nil {
-                fmt.Printf("[ERROR] Failed to write to clipboard: %v\n", err)
-                sendNotification("Clipboard Sync Error", "Failed to update clipboard.")
-            } else {
-                fmt.Println("[INFO] Clipboard successfully updated from client.")
-                lastClipboardContent = content
-
-                // Set the clipboard update source as "server"
-                broadcastClipboard(content, "server", conn)
-            }
-        } else {
-            fmt.Println("[INFO] Ignored duplicate clipboard content.")
-        }
-    }
-}
-
 
 // Broadcast clipboard updates to all connected clients except the source
 func broadcastClipboard(content, source string, sourceConn *websocket.Conn) {
-    if source == "server" {
-        fmt.Println("[INFO] Skipping broadcast for server-originated update.")
-        return
-    }
+	if source == "server" {
+		fmt.Println("[INFO] Skipping broadcast for server-originated update.")
+		return
+	}
 
-    clientsMutex.Lock()
-    defer clientsMutex.Unlock()
+	clientsMutex.Lock()
+	defer clientsMutex.Unlock()
 
-    for client := range clients {
-        if client == sourceConn {
-            continue // Skip broadcasting to the source client
-        }
+	for client := range clients {
+		if client == sourceConn {
+			continue // Skip broadcasting to the source client
+		}
 
-        err := client.WriteMessage(websocket.TextMessage, []byte(content))
-        if err != nil {
-            fmt.Printf("[ERROR] Failed to send message to client: %v\n", err)
-            client.Close()
-            delete(clients, client)
-        }
-    }
-    fmt.Printf("[INFO] Broadcasted clipboard update to %d clients\n", len(clients))
+		err := client.WriteMessage(websocket.TextMessage, []byte(content))
+		if err != nil {
+			fmt.Printf("[ERROR] Failed to send message to client: %v\n", err)
+			client.Close()
+			delete(clients, client)
+		}
+	}
+	fmt.Printf("[INFO] Broadcasted clipboard update to %d clients\n", len(clients))
 }
-
-
-
 
 var qrRouteRegistered = false
 
@@ -466,11 +454,12 @@ func openQRCodePage() {
 		fmt.Println("[ERROR] Failed to open QR code page:", err)
 	}
 }
+
 // Start an HTTP server on port 3000 to serve the QR code page
 func startQRCodeServer() {
 	httpServer := &http.Server{
-		Addr: ":3000", // Listen on port 3000
-		Handler: nil,  // Use default mux
+		Addr:    ":3000", // Listen on port 3000
+		Handler: nil,     // Use default mux
 	}
 
 	fmt.Println("[INFO] Starting HTTP server on http://localhost:3000")
@@ -478,8 +467,6 @@ func startQRCodeServer() {
 		fmt.Println("[ERROR] HTTP server error:", err)
 	}
 }
-
-
 
 // Utility to get the default browser command based on OS
 func getBrowserCommand() string {
@@ -492,8 +479,6 @@ func getBrowserCommand() string {
 		return "xdg-open"
 	}
 }
-
-
 
 // Utility to read clipboard content
 func readClipboard() string {
@@ -570,7 +555,6 @@ func sendNotification(title, message string) {
 	}
 }
 
-
 // Function to toggle notifications on or off
 func toggleNotifications() {
 	if notificationsEnabled {
@@ -583,7 +567,6 @@ func toggleNotifications() {
 		sendNotification("Notifications Enabled", "Notifications have been turned on.")
 	}
 }
-
 
 // Cleanup on exit
 func onExit() {
