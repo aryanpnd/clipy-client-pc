@@ -505,6 +505,7 @@ func openQRCodePage() {
 							<p><strong>WebSocket URL:</strong> <code>%s</code></p>
 							<img src="data:image/png;base64,%s" alt="QR Code">
 							<p class="note">You can use it using your system tray.</p>
+							<p class="note">The clipboard images will be saved to <code>YOUR_Desktop\clipy</code>. Note: Except .PNG all formats would be ignored. </p>
 						</div>
 					</body>
 				</html>
