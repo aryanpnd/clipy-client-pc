@@ -1,23 +1,27 @@
 package main
 
 import (
+	"bytes"
 	"encoding/base64"
 	"fmt"
+	"image"
+	"image/png"
 	"io"
 	"net"
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"sync"
 	"time"
 
-	"github.com/atotto/clipboard"
 	"github.com/gen2brain/beeep"
 	"github.com/getlantern/systray"
 	"github.com/gorilla/websocket"
 	"github.com/skip2/go-qrcode"
+	"golang.design/x/clipboard"
 )
 
 var (
@@ -156,6 +160,9 @@ func startServer() {
 		sendNotification("Running", "Server is already running")
 		return
 	}
+	if err := clipboard.Init(); err != nil {
+		fmt.Printf("Failed to initialize clipboard: %v", err)
+	}
 
 	isServerRunning = true
 	fmt.Println("[INFO] Starting server and clipboard monitoring")
@@ -276,20 +283,39 @@ func startWebSocketServer() {
 				content := string(message)
 				fmt.Printf("[INFO] Clipboard received from client: %s\n", content)
 
-				if content != lastClipboardContent {
-					err = clipboard.WriteAll(content)
-					if err != nil {
-						fmt.Printf("[ERROR] Failed to write to clipboard: %v\n", err)
-						sendNotification("Clipboard Sync Error", "Failed to update clipboard.")
-					} else {
-						fmt.Println("[INFO] Clipboard successfully updated from client.")
-						lastClipboardContent = content
+				if strings.HasPrefix(content, "text:") {
+					textContent := strings.TrimPrefix(content, "text:")
 
-						// Broadcast to other clients except the source
-						broadcastClipboard(content, "server", conn)
+					if textContent != lastClipboardContent {
+						err := clipboard.Write(clipboard.FmtText, []byte(textContent))
+						if err != nil {
+							fmt.Println("[ERROR] Failed to update clipboard text:", err)
+						} else {
+							lastClipboardContent = textContent
+							fmt.Println("Clipboard updated with content:", textContent)
+						}
 					}
-				} else {
-					fmt.Println("[INFO] Ignored duplicate clipboard content.")
+				} else if strings.HasPrefix(content, "image:") {
+					// Handle image content (Base64-encoded)
+					imageContent := strings.TrimPrefix(content, "image:")
+
+					// Decode the Base64-encoded image
+					decodedImage, err := base64.StdEncoding.DecodeString(imageContent)
+					if err != nil {
+						fmt.Println("[ERROR] Failed to decode image:", err)
+						return
+					}
+					_, err = saveImageToFile(decodedImage)
+					if err != nil {
+						fmt.Println("[ERROR]", err)
+						return
+					}
+					sendNotification("Image Received", "Image saved to the Clipboard and Desktop.")
+
+					// Save the image to the clipboard
+					changed := clipboard.Write(clipboard.FmtImage, decodedImage)
+					<-changed // Discard the channel notification (we're not using it)
+					fmt.Println("[INFO] Image successfully copied to clipboard.")
 				}
 			}
 		}
@@ -303,9 +329,9 @@ func startWebSocketServer() {
 	}
 }
 
-// Monitor clipboard changes and broadcast new content to clients
 func monitorClipboardChanges() {
 	lastClipboardContent = readClipboard()
+	fmt.Print("[INFO] Initial clipboard content: ", lastClipboardContent, "\n")
 
 	for {
 		select {
@@ -331,8 +357,9 @@ func monitorClipboardChanges() {
 
 // Broadcast clipboard updates to all connected clients except the source
 func broadcastClipboard(content, source string, sourceConn *websocket.Conn) {
-	if source == "server" {
-		fmt.Println("[INFO] Skipping broadcast for server-originated update.")
+	// Prevent sending the same content repeatedly
+	if source == "server" && content == lastClipboardContent {
+		fmt.Println("[INFO] Skipping broadcast, same content as last update.")
 		return
 	}
 
@@ -352,6 +379,35 @@ func broadcastClipboard(content, source string, sourceConn *websocket.Conn) {
 		}
 	}
 	fmt.Printf("[INFO] Broadcasted clipboard update to %d clients\n", len(clients))
+}
+
+func readClipboard() string {
+	text := clipboard.Read(clipboard.FmtText)
+	if text != nil && len(text) > 0 {
+		return fmt.Sprintf("text:%s", string(text))
+	}
+
+	// Read image data from the clipboard
+	imageData := clipboard.Read(clipboard.FmtImage)
+	if imageData != nil && len(imageData) > 0 {
+		// Decode the image from the byte slice
+		img, _, err := image.Decode(bytes.NewReader(imageData))
+		if err != nil {
+			fmt.Println("[ERROR] Failed to decode image:", err)
+			return ""
+		}
+		// Encode the image as Base64
+		var buf bytes.Buffer
+		err = png.Encode(&buf, img)
+		if err != nil {
+			fmt.Println("[ERROR] Failed to encode image:", err)
+			return ""
+		}
+		encodedImage := base64.StdEncoding.EncodeToString(buf.Bytes())
+		return fmt.Sprintf("image:%s", encodedImage)
+	}
+
+	return ""
 }
 
 var qrRouteRegistered = false
@@ -483,16 +539,6 @@ func getBrowserCommand() string {
 	}
 }
 
-// Utility to read clipboard content
-func readClipboard() string {
-	content, err := clipboard.ReadAll()
-	if err != nil {
-		fmt.Println("[ERROR] Error reading clipboard:", err)
-		return ""
-	}
-	return content
-}
-
 // Utility to get local IP address (WLAN adapter)
 func getLocalIP() string {
 	interfaces, err := net.Interfaces()
@@ -605,4 +651,49 @@ func onExit() {
 	serverShutdown <- true
 	fmt.Println("[INFO] Server stopped successfully.")
 
+}
+
+// Saves the image to the Desktop inside the "clipy" folder and returns the file path
+func saveImageToFile(decodedImage []byte) (string, error) {
+	// Create a file from the decoded image
+	imgReader := bytes.NewReader(decodedImage)
+	img, _, err := image.Decode(imgReader)
+	if err != nil {
+		return "", fmt.Errorf("failed to decode image from bytes: %v", err)
+	}
+
+	// Get the desktop directory
+	desktopDir, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("unable to get user home directory: %v", err)
+	}
+	desktopDir = filepath.Join(desktopDir, "Desktop")
+
+	// Create the "clipy" folder on the desktop if it doesn't exist
+	clipyFolder := filepath.Join(desktopDir, "clipy")
+	err = os.MkdirAll(clipyFolder, os.ModePerm)
+	if err != nil {
+		return "", fmt.Errorf("failed to create 'clipy' folder: %v", err)
+	}
+
+	// Create a unique filename for the image in the format "DD-MM-YY_HHMMSS_clipboard_image.png"
+	t := time.Now()
+	outputFile := filepath.Join(clipyFolder, fmt.Sprintf("%02d-%02d-%02d_%02d%02d%02d_clipboard_image.png",
+		t.Day(), t.Month(), t.Year()%100, t.Hour(), t.Minute(), t.Second()))
+
+	// Save the image as PNG to the file
+	file, err := os.Create(outputFile)
+	if err != nil {
+		return "", fmt.Errorf("failed to create image file: %v", err)
+	}
+	defer file.Close()
+
+	// Encode the image as PNG and save it to the file
+	err = png.Encode(file, img)
+	if err != nil {
+		return "", fmt.Errorf("failed to encode and save image: %v", err)
+	}
+
+	fmt.Println("[INFO] Image saved to:", outputFile)
+	return outputFile, nil
 }
