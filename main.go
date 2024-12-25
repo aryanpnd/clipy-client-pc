@@ -302,19 +302,31 @@ func startWebSocketServer() {
 					// Decode the Base64-encoded image
 					decodedImage, err := base64.StdEncoding.DecodeString(imageContent)
 					if err != nil {
-						fmt.Println("[ERROR] Failed to decode image:", err)
-						return
+						fmt.Printf("[ERROR] Failed to decode image: %v\n", err)
+						sendNotification("Image Error", "Wrong image format received. Must be PNG.")
+						continue
 					}
-					_, err = saveImageToFile(decodedImage)
+
+					// Save the image to a file
+					outputFile, err := saveImageToFile(decodedImage)
 					if err != nil {
-						fmt.Println("[ERROR]", err)
-						return
+						fmt.Printf("[ERROR] Failed to save image to file: %v\n", err)
+						sendNotification("Image Error", "Failed to save image to file. Must be PNG")
+						continue
 					}
+					fmt.Printf("[INFO] Image saved to: %s\n", outputFile)
+
+					// Send a notification
 					sendNotification("Image Received", "Image saved to the Clipboard and Desktop.")
 
 					// Save the image to the clipboard
 					changed := clipboard.Write(clipboard.FmtImage, decodedImage)
-					<-changed // Discard the channel notification (we're not using it)
+					if changed == nil {
+						fmt.Println("[ERROR] Failed to write image to clipboard")
+						sendNotification("Image Error", "Failed to copy image to clipboard.")
+						continue
+					}
+					<-changed // Wait for the write operation to complete
 					fmt.Println("[INFO] Image successfully copied to clipboard.")
 				}
 			}
