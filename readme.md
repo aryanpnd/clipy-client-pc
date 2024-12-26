@@ -32,7 +32,7 @@ The Clipy project consists of three main components:
 
 1. Clone the repository:
    ```bash
-   git clone https://github.com/aryanpnd/clipy.git
+   git clone https://github.com/aryanpnd/clipy-client-pc.git
    cd clipy/server
    ```
 
