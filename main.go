@@ -358,7 +358,7 @@ func monitorClipboardChanges() {
 
 			currentContent := readClipboard()
 			if currentContent != lastClipboardContent {
-				fmt.Printf("[INFO] Clipboard updated locally: %s\n", currentContent)
+				// fmt.Printf("[INFO] Clipboard updated locally: %s\n", currentContent)
 				broadcastClipboard(currentContent, "local", nil)
 				lastClipboardContent = currentContent
 			}
@@ -445,7 +445,7 @@ func openQRCodePage() {
 						<meta name="viewport" content="width=device-width, initial-scale=1.0">
 						<title>Clipy - Sync your clipboard</title>
 						<style>
-							body {
+						body {
 							background-color: #171717;
 							color: white;
 							display: flex;
@@ -455,60 +455,86 @@ func openQRCodePage() {
 							height: 100vh;
 							margin: 0;
 							font-family: Arial, sans-serif;
-							}
+						}
 
-							.header {
+						.header {
 							text-align: center;
 							margin-bottom: 30px;
-							}
+						}
 
-							.header h1 {
+						.header h1 {
 							font-size: 2.5rem;
 							margin: 0;
-							}
+						}
 
-							.header p {
+						.header p {
 							font-size: 1rem;
 							margin: 5px 0;
 							color: #ccc;
-							}
+						}
 
-							.content {
+						.content {
 							text-align: center;
-							}
+						}
 
-							p {
+						p {
 							margin: 10px 0;
-							}
+						}
 
-							.note {
+						.note {
 							font-size: 0.9rem;
 							color: #aaa;
 							margin-top: 15px;
-							}
+						}
 
-							code {
+						code {
 							background-color: #333;
 							padding: 5px;
 							border-radius: 4px;
-							}
+						}
 
+						/* Footer */
+						.footer {
+							position: fixed;
+							bottom: 10px;
+							right: 10px;
+							color: #ccc;
+							font-size: 0.8rem;
+						}
+
+						.footer a {
+							color: #ccc;
+							margin-left: 5px;
+						}
+
+						.footer a:hover {
+							text-decoration: underline;
+						}
 						</style>
 					</head>
 					<body>
 						<div class="header">
-							<h1>Clipy</h1>
-							<p>Sync your clipboard effortlessly</p>
+						<h1>Clipy</h1>
+						<p>Sync your clipboard effortlessly</p>
 						</div>
 						<div class="content">
-							<p>Connect your Android device using the WebSocket URL or scan the QR code below:</p>
-							<p><strong>WebSocket URL:</strong> <code>%s</code></p>
-							<img src="data:image/png;base64,%s" alt="QR Code">
-							<p class="note">You can use it using your system tray.</p>
-							<p class="note">The clipboard images will be saved to <code>YOUR_Desktop\clipy</code>. Note: Except .PNG all formats would be ignored. </p>
+						<p>Connect your Android device using the WebSocket URL or scan the QR code below:</p>
+						<p><strong>WebSocket URL:</strong> <code>%s</code></p>
+						<img src="data:image/png;base64,%s" alt="QR Code">
+						<p class="note">You can use it using your system tray.</p>
+						<p class="note">The clipboard images will be saved to <code>YOUR_Desktop\clipy</code>. Note: Except .PNG all formats would be ignored. </p>
+						</div>
+
+						<!-- Footer with GitHub link -->
+						<div class="footer">
+						<span>&copy; 2024 Clipy. Developed by</span>
+						<a href="https://github.com/aryanpnd" target="_blank">aryan</a>
+						<span>|</span>
+						<a href="https://github.com/aryanpnd/clipy-client-pc" target="_blank">Contribute</a>
 						</div>
 					</body>
 				</html>
+
 			`, wsURL, base64.StdEncoding.EncodeToString(qrCode))
 		})
 
