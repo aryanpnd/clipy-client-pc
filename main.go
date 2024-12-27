@@ -31,8 +31,6 @@ var (
 	isServerRunning       = false
 	paused                = false // A flag to control pause/resume
 	stopMonitoring        = make(chan bool)
-	serverDone            = make(chan bool)
-	serverShutdown        = make(chan bool) // Channel to signal server shutdown
 	httpServer            *http.Server      // HTTP server instance
 	notificationsEnabled  = true            // Flag to enable/disable notifications
 	notificationsMenuItem *systray.MenuItem // Menu item to toggle notifications
@@ -41,12 +39,35 @@ var (
 var statusMenuItem *systray.MenuItem
 var connectedDevicesMenuItem *systray.MenuItem
 
+const (
+	port = "8080"
+)
+
 // Start the application
 func main() {
+	// go func() {
+	// 	sendNotification("Clipy", "Checking if another instance is running or port is busy...")
+	// }()
+	if isPortInUse(port) {
+		sendNotification("Clipy", "The port 8080 is busy. Close the application using the port to start the application again.")
+		// try removing the lock file if exists
+		os.Exit(1)
+	}
+
 	// Start the system tray and wait for it to exit
 	go startSystemTray()
 	// Block main goroutine to keep the application alive
 	select {}
+}
+func isPortInUse(port string) bool {
+	// Try to listen on the specified port
+	ln, err := net.Listen("tcp", ":"+port)
+	if err != nil {
+		// Port is in use
+		return true
+	}
+	ln.Close()
+	return false
 }
 
 // Start the system tray
@@ -107,7 +128,8 @@ func onReady() {
 
 			case <-exitMenuItem.ClickedCh:
 				fmt.Println("[INFO] Exit menu clicked")
-				os.Exit(0) // Exit the application
+				onExit() // Cleanup and exit the application
+				// os.Exit(0) // Exit the application
 				return
 
 			case <-notificationsMenuItem.ClickedCh:
@@ -169,8 +191,6 @@ func startServer() {
 
 	// Reinitialize channels
 	stopMonitoring = make(chan bool)
-	serverDone = make(chan bool)
-	serverShutdown = make(chan bool)
 
 	// Start WebSocket server and clipboard monitoring in separate goroutines
 	go startWebSocketServer()
@@ -614,7 +634,7 @@ func getLocalIP() string {
 // Utility to get tray icon (reads icon file and returns it as byte slice)
 func getIcon() []byte {
 	// Load the icon from a file (ensure the path to the icon is correct)
-	iconPath := "icon.ico" // Replace with your actual file path
+	iconPath := "clipylogo.ico" // Replace with your actual file path
 
 	iconFile, err := os.Open(iconPath)
 	if err != nil {
@@ -661,9 +681,6 @@ func onExit() {
 	// Stop clipboard monitoring by sending stop signal
 	stopMonitoring <- true
 
-	// Wait for server shutdown signal (confirm server is stopped)
-	<-serverDone
-
 	// Close WebSocket connections (close each client connection)
 	clientsMutex.Lock()
 	for client := range clients {
@@ -686,10 +703,9 @@ func onExit() {
 		}
 	}
 
-	// Signal that the server is fully stopped
-	serverShutdown <- true
 	fmt.Println("[INFO] Server stopped successfully.")
 
+	os.Exit(0)
 }
 
 // Saves the image to the Desktop inside the "clipy" folder and returns the file path
